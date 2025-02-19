@@ -5,8 +5,7 @@ from scipy.integrate import simpson
 import os
 
 # File Path (Update this to match actual location)
-file_path = r"C:\Users\colin\OneDrive\Desktop\Graph Test\Waveform_Event_Capture_5.csv"
-
+directory = os.path.join(os.getcwd(), "raw_data", "Experiment_1_Raw_Data")
 
 # Load Data
 df = pd.read_csv(file_path, skiprows=17)
