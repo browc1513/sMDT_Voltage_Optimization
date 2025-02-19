@@ -5,7 +5,7 @@ import glob
 import os
 
 # Folder Setup
-folder_path = r"C:\Users\colin\OneDrive\Documents\MSU Muon Detector Projects\Voltage Optimization Project\Experiment 1 Raw Data (Establish Baseline Parameters)"
+directory = os.path.join(os.getcwd(), "raw_data", "Experiment_1_Raw_Data")
 
 if not os.path.isdir(folder_path):
     print(f"Directory does not exist: {folder_path}")
