@@ -4,7 +4,7 @@ import pandas as pd
 import os
 
 # Define the directory path
-directory = "C:/Users/colin/OneDrive/Documents/MSU Muon Detector Projects/Voltage Optimization Project/Experiment 1 Raw Data (Establish Baseline Parameters)"
+directory = os.path.join(os.getcwd(), "raw_data", "Experiment_1_Raw_Data")
 print(f"Processing files in: {directory}")
 print("Files in directory:", os.listdir(directory))
 
