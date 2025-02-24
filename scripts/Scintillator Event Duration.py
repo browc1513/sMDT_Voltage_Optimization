@@ -5,7 +5,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Define the directory path
+# Define the directory path (updated for GitHub structure)
 directory = os.path.join(os.getcwd(), "raw_data", "Experiment_1_Raw_Data")
 print(f"Processing files in: {directory}")
 print("Files in directory:", os.listdir(directory))
@@ -46,39 +46,28 @@ def process_all_files(directory):
     
     for file in os.listdir(directory):
         if file.endswith(".csv"):  # Only process CSV files
+            
+            # Skip Signal_Area_Summary.csv if it doesn't match the expected structure
+            if file == "Signal_Area_Summary.csv":
+                print(f"Skipping {file} due to unexpected structure.")
+                continue
+            
             file_path = os.path.join(directory, file)
             event_durations = process_event_durations(file_path)
             all_durations["CH1 (s)"].extend(event_durations["CH1 (s)"])
             all_durations["CH2 (s)"].extend(event_durations["CH2 (s)"])
     
-    # Convert to DataFrame and save to CSV
-    df_durations = pd.DataFrame({"CH1 Duration (s)": all_durations["CH1 (s)"], "CH2 Duration (s)": all_durations["CH2 (s)"]})
-    output_file = os.path.join(directory, "Event_Duration_Summary.csv")
-    df_durations.to_csv(output_file, index=False)
-    print(f"\nEvent duration summary saved to: {output_file}")
-    
-    # Compute and print average durations and SEM
+    # Compute and print average durations
     mean_ch1 = np.mean(all_durations["CH1 (s)"])
     mean_ch2 = np.mean(all_durations["CH2 (s)"])
-    sem_ch1 = np.std(all_durations["CH1 (s)"]) / np.sqrt(len(all_durations["CH1 (s)"]))
-    sem_ch2 = np.std(all_durations["CH2 (s)"]) / np.sqrt(len(all_durations["CH2 (s)"]))
-    
     print(f"\nAverage Event Duration:")
-    print(f"CH1: {mean_ch1:.2e} s, SEM: {sem_ch1:.2e} s")
-    print(f"CH2: {mean_ch2:.2e} s, SEM: {sem_ch2:.2e} s")
+    print(f"CH1: {mean_ch1:.2e} s")
+    print(f"CH2: {mean_ch2:.2e} s")
     
     # Plot histogram (distribution curve)
     plt.figure(figsize=(10, 5))
     plt.hist(all_durations["CH1 (s)"], bins=30, color='blue', alpha=0.7, edgecolor='black', label='CH1')
     plt.hist(all_durations["CH2 (s)"], bins=30, color='green', alpha=0.7, edgecolor='black', label='CH2')
-    
-    # Add average lines
-    plt.axvline(mean_ch1, color='red', linestyle='dashed', label=f'CH1 Mean: {mean_ch1:.2e} s')
-    plt.axvline(mean_ch2, color='purple', linestyle='dashed', label=f'CH2 Mean: {mean_ch2:.2e} s')
-    
-    # Add error bars as shaded regions
-    plt.fill_betweenx([0, plt.ylim()[1]], mean_ch1 - sem_ch1, mean_ch1 + sem_ch1, color='red', alpha=0.2, label=f'CH1 SEM: {sem_ch1:.2e} s')
-    plt.fill_betweenx([0, plt.ylim()[1]], mean_ch2 - sem_ch2, mean_ch2 + sem_ch2, color='purple', alpha=0.2, label=f'CH2 SEM: {sem_ch2:.2e} s')
     
     plt.xlabel("Event Duration (s)")
     plt.ylabel("Frequency")
@@ -86,7 +75,7 @@ def process_all_files(directory):
     plt.legend()
     plt.grid(True)
     plt.show()
-    
+
 # Run the function
 process_all_files(directory)
 

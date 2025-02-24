@@ -4,8 +4,14 @@ import matplotlib.pyplot as plt
 from scipy.integrate import simpson
 import os
 
-# File Path (Update this to match actual location)
+# Define the directory path (updated for GitHub directory structure)
 directory = os.path.join(os.getcwd(), "raw_data", "Experiment_1_Raw_Data")
+print(f"Processing files in: {directory}")
+print("Files in directory:", os.listdir(directory))
+
+# Define the specific file path (updated to reflect correct file name)
+file_name = "sMDT_3400V_Event_001.csv"
+file_path = os.path.join(directory, file_name)
 
 # Load Data
 df = pd.read_csv(file_path, skiprows=17)
