@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Define the directory path
-directory = os.path.join(os.getcwd(), "raw_data", "Experiment_1_Raw_Data")
+directory = os.path.join(os.path.dirname(os.getcwd()), "raw_data", "Experiment_1_Raw_Data")
 print(f"Processing files in: {directory}")
 print("Files in directory:", os.listdir(directory))
 
@@ -56,7 +56,9 @@ def process_all_files(directory):
     
     # Convert to DataFrame and save to CSV
     df_areas = pd.DataFrame({"CH1 Area (V·s)": all_areas["CH1 (V)"], "CH2 Area (V·s)": all_areas["CH2 (V)"]})
-    output_file = os.path.join(directory, "Signal_Area_Summary.csv")
+    summary_directory = os.path.join(os.path.dirname(os.getcwd()), "summary_reports")
+    os.makedirs(summary_directory, exist_ok=True)  # Ensure the directory exists
+    output_file = os.path.join(summary_directory, "Signal_Area_Summary.csv")
     df_areas.to_csv(output_file, index=False)
     print(f"\nSignal area summary saved to: {output_file}")
     
@@ -65,25 +67,44 @@ def process_all_files(directory):
     mean_ch2 = np.mean(all_areas["CH2 (V)"])
     sem_ch1 = np.std(all_areas["CH1 (V)"]) / np.sqrt(len(all_areas["CH1 (V)"]))
     sem_ch2 = np.std(all_areas["CH2 (V)"]) / np.sqrt(len(all_areas["CH2 (V)"]))
-    
-    # Plot histograms
-    plt.figure(figsize=(10, 5))
-    plt.hist(all_areas["CH1 (V)"], bins=30, color='blue', alpha=0.7, edgecolor='black', label='CH1')
-    plt.hist(all_areas["CH2 (V)"], bins=30, color='green', alpha=0.7, edgecolor='black', label='CH2')
-    
-    # Add average lines
-    plt.axvline(mean_ch1, color='red', linestyle='dashed', label=f'CH1 Mean: {mean_ch1:.2e} V·s')
-    plt.axvline(mean_ch2, color='purple', linestyle='dashed', label=f'CH2 Mean: {mean_ch2:.2e} V·s')
-    
-    # Add error bars
-    plt.fill_betweenx([0, plt.ylim()[1]], mean_ch1 - sem_ch1, mean_ch1 + sem_ch1, color='red', alpha=0.2, label=f'CH1 SEM: {sem_ch1:.2e} V·s')
-    plt.fill_betweenx([0, plt.ylim()[1]], mean_ch2 - sem_ch2, mean_ch2 + sem_ch2, color='purple', alpha=0.2, label=f'CH2 SEM: {sem_ch2:.2e} V·s')
-    
-    plt.xlabel("Signal Area (V·s)")
-    plt.ylabel("Frequency")
-    plt.title("Histogram of Signal Areas")
-    plt.legend()
-    plt.grid(True)
+
+    # Dynamically determine bin count using an adjusted Rice Rule (increased resolution)
+    bins = int(2.5 * np.cbrt(len(all_areas["CH1 (V)"])))  # Uses 2.5 × cube root of N for better binning
+
+    # Create Stacked Subplots
+    fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True, gridspec_kw={'hspace': 0.4})
+
+    # Top subplot - CH1
+    axes[0].hist(all_areas["CH1 (V)"], bins=bins, color='blue', alpha=0.5, edgecolor='black', label='CH1')
+    axes[0].axvline(mean_ch1, color='red', linestyle='dashed', label=f'CH1 Mean: {mean_ch1:.2e} V·s')
+    axes[0].fill_betweenx([0, axes[0].get_ylim()[1]], mean_ch1 - sem_ch1, mean_ch1 + sem_ch1, 
+                           color='red', alpha=0.4, edgecolor='red', linestyle="dotted", label=f'CH1 SEM: {sem_ch1:.2e} V·s')
+    axes[0].set_ylabel("Frequency")
+    axes[0].set_title("CH1 Histogram of Signal Areas")
+    axes[0].legend(loc='upper right', framealpha=0.7)  # Semi-transparent legend
+    axes[0].grid(True)
+
+    # Bottom subplot - CH2
+    axes[1].hist(all_areas["CH2 (V)"], bins=bins, color='green', alpha=0.5, edgecolor='black', label='CH2')
+    axes[1].axvline(mean_ch2, color='red', linestyle='dashed', label=f'CH2 Mean: {mean_ch2:.2e} V·s')
+    axes[1].fill_betweenx([0, axes[1].get_ylim()[1]], mean_ch2 - sem_ch2, mean_ch2 + sem_ch2, 
+                           color='red', alpha=0.4, edgecolor='red', linestyle="dotted", label=f'CH2 SEM: {sem_ch2:.2e} V·s')
+    axes[1].set_xlabel("Signal Area (V·s)")
+    axes[1].set_ylabel("Frequency")
+    axes[1].set_title("CH2 Histogram of Signal Areas")
+    axes[1].legend(loc='upper right', framealpha=0.7)  # Semi-transparent legend
+    axes[1].grid(True)
+
+    # Ensure "figures" directory exists
+    figures_directory = os.path.join(os.path.dirname(os.getcwd()), "figures")
+    os.makedirs(figures_directory, exist_ok=True)
+
+    # Save figure to the specified path
+    figure_path = os.path.join(figures_directory, "Signal_Area_Histogram.png")
+    plt.savefig(figure_path, dpi=600, bbox_inches='tight')
+    print(f"\nFigure saved to: {figure_path}")
+
+    # Display the figure
     plt.show()
     
 # Run the function
