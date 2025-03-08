@@ -1,98 +1,125 @@
-print("Script is running...")
-
-import pandas as pd
-import os
+import pyvisa
 import numpy as np
+import csv
+import time
+import os
 import matplotlib.pyplot as plt
 
-# Define the directory path
-directory = os.path.join(os.getcwd(), "raw_data", "Experiment_1_Raw_Data")
-print(f"Processing files in: {directory}")
-print("Files in directory:", os.listdir(directory))
+# Initialize VISA resource manager
+rm = pyvisa.ResourceManager()
 
-# Function to find sMDT peak voltages
-def process_sMDT(file_path):
-    df = pd.read_csv(file_path, skiprows=17)  # Load CSV and skip initial rows
-    print(f"Processing file: {file_path}, Columns found: {df.columns.tolist()}")  # Debugging output
+# List available VISA devices
+devices = rm.list_resources()
+print("Available VISA Devices:", devices)
 
-    # Dynamically detect and rename columns
-    expected_columns = ["D", "Q"]  # Time (s) and sMDT (V)
-    available_columns = df.columns.tolist()
+if not devices:
+    raise Exception("No VISA devices found. Check oscilloscope connection.")
 
-    # Check if expected columns exist, otherwise adjust
-    if len(available_columns) >= max([ord(c) - ord('A') for c in expected_columns]) + 1:
-        df = df.iloc[:, [ord(c) - ord('A') for c in expected_columns]]
-        df.columns = ["Time (s)", "sMDT (V)"]
-    else:
-        print(f"Skipping {file_path}: Columns D and Q not found.")
-        return []
+# Select the correct VISA resource dynamically
+oscope = rm.open_resource(devices[0])  # Uses the first available device (update manually if needed)
 
-    df.dropna(inplace=True)  # Remove any NaN values
-    df = df.apply(pd.to_numeric)  # Convert to numeric
+# Test communication
+oscope.write("*IDN?")
+response = oscope.read()
+print("Oscilloscope ID:", response)
 
-    # Find peak negative voltages (most negative values per event)
-    peak_voltages = []
+# Define save directory
+save_dir = "C:\\Users\\Swager\\OneDrive\\Desktop\\experiment_folder\\events"
+os.makedirs(save_dir, exist_ok=True)  # Ensure directory exists
 
-    above_threshold = False
-    start_index = None
+# Define event detection parameters
+SCINTILLATOR_THRESHOLD = 2.2  # Voltage threshold for CH1 & CH2
+SCINTILLATOR_DURATION = 3  # Number of consecutive points above threshold
+SMDT_THRESHOLD = -30.0E-3  # Voltage threshold for CH3
+SMDT_DELAY = 8.44E-10  # Expected time delay for CH3 (mean latency)
+SMDT_WINDOW = 1.874E-10  # Increased window to 2x SEM  # Allowed time window for CH3 detection (SEM)
+DEAD_TIME = 50E-6  # Ignore new events for 50µs
 
-    for i in range(len(df)):
-        if df["sMDT (V)"].iloc[i] < 0:  # sMDT signal should be negative
-            if not above_threshold:
-                above_threshold = True
-                start_index = i
-        else:
-            if above_threshold:  # End of an event
-                above_threshold = False
-                if start_index is not None:
-                    event_data = df["sMDT (V)"].iloc[start_index:i]
-                    peak_voltage = np.min(event_data)  # Most negative value
-                    peak_voltages.append(peak_voltage)
+# Define collection settings
+event_target = 1  # Stop after recording this many events
+event_limit = 100  # Stop after this many waveform captures (set None for unlimited)
+start_time = time.time()
+event_count = 0
 
-    return peak_voltages
+print("\n--- Starting Continuous Data Collection ---")
 
-# Process all CSV files in a directory
-def process_all_files(directory):
-    all_peaks = []
+while event_count < event_target:
+    if event_limit and event_count >= event_limit:
+        break
 
-    for file in os.listdir(directory):
-        if file.endswith(".csv"):  # Only process CSV files
-            file_path = os.path.join(directory, file)
-            peaks = process_sMDT(file_path)
-            all_peaks.extend(peaks)
+    all_data = []
+    timestamps = []
+    channel_data = {1: [], 2: [], 3: []}
+    
+    # Acquire data for each channel
+    for channel, name in [(1, "Scintillator 1"), (2, "Scintillator 2"), (3, "sMDT")]:
+        oscope.write(f"DATa:SOUrce CH{channel}")
+        oscope.write("DATa:ENCdg ASCII")
+        oscope.write("DATa:WIDth 1")
+        oscope.write("ACQuire:MODe SAMPLE")
 
-    if not all_peaks:
-        print("No valid peak voltage data found. Exiting...")
-        return
+        # Query scaling factors
+        oscope.write("WFMPRe:YMUlt?")
+        ymult = float(oscope.read())
 
-    # Convert to DataFrame and save to CSV
-    df_peaks = pd.DataFrame({"sMDT Peak Voltage (V)": all_peaks})
-    output_file = os.path.join(directory, "sMDT_Peak_Voltage_Summary.csv")
-    df_peaks.to_csv(output_file, index=False)
-    print(f"\nPeak voltage summary saved to: {output_file}")
+        oscope.write("WFMPRe:YOFf?")
+        yoff = float(oscope.read())
 
-    # Compute statistics
-    mean_peak = np.mean(all_peaks)
-    sem_peak = np.std(all_peaks) / np.sqrt(len(all_peaks))
+        oscope.write("WFMPRe:YZEro?")
+        yzero = float(oscope.read())
 
-    # Plot histogram
-    plt.figure(figsize=(10, 5))
-    plt.hist(all_peaks, bins=30, color='blue', alpha=0.7, edgecolor='black', label='sMDT Peaks')
+        # Request waveform data
+        oscope.write("CURVe?")
+        raw_data = oscope.read()
 
-    # Add average line
-    plt.axvline(mean_peak, color='red', linestyle='dashed', label=f'Mean: {mean_peak:.2e} V')
+        # Convert raw data to numeric values
+        raw_waveform = np.array(raw_data.split(","), dtype=float)
 
-    # Add error bars
-    plt.fill_betweenx([0, plt.ylim()[1]], mean_peak - sem_peak, mean_peak + sem_peak, color='red', alpha=0.2, label=f'SEM: {sem_peak:.2e} V')
+        # Apply scaling conversion
+        voltage_values = (raw_waveform - yoff) * ymult + yzero
 
-    plt.xlabel("sMDT Peak Voltage (V)")
-    plt.ylabel("Frequency")
-    plt.title("Histogram of sMDT Peak Voltages")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+        # Store data
+        channel_data[channel] = voltage_values
+        if channel == 1:
+            timestamps = np.linspace(0, len(voltage_values) * 1e-9, len(voltage_values))  # Assuming 1 ns sample rate
+    
+    # Debugging: Print occurrences where CH1 & CH2 exceed threshold together
+    coincident_events = np.where((channel_data[1] > SCINTILLATOR_THRESHOLD) & (channel_data[2] > SCINTILLATOR_THRESHOLD))[0]
+    print(f"Number of CH1 & CH2 coincidences: {len(coincident_events)}")
+    
+    if len(coincident_events) > 0:
+        for idx in coincident_events:
+            if idx + SCINTILLATOR_DURATION < len(channel_data[1]) and all(channel_data[1][idx:idx+SCINTILLATOR_DURATION] > SCINTILLATOR_THRESHOLD) and all(channel_data[2][idx:idx+SCINTILLATOR_DURATION] > SCINTILLATOR_THRESHOLD):
+                smdt_time = timestamps[idx] + SMDT_DELAY
+                smdt_window_start = smdt_time - SMDT_WINDOW
+                smdt_window_end = smdt_time + SMDT_WINDOW
 
-# Run the function
-process_all_files(directory)
+                smdt_event_indices = np.where((timestamps >= smdt_window_start) & (timestamps <= smdt_window_end) & (channel_data[3] < SMDT_THRESHOLD))[0]
 
-input("Press Enter to exit...")
+                if len(smdt_event_indices) > 0:
+                    event_count += 1
+                    event_filename = os.path.join(save_dir, f"Event_{event_count:03d}.csv")
+                    with open(event_filename, "w", newline="") as event_file:
+                        writer = csv.writer(event_file)
+                        writer.writerow(["Time (s)", "CH1 (V)", "CH2 (V)", "sMDT (V)"])
+                        for i in range(len(timestamps)):
+                            writer.writerow([timestamps[i], channel_data[1][i], channel_data[2][i], channel_data[3][i]])
+                    print(f"Event {event_count} recorded: {event_filename}")
+                    
+                    # Plot the waveform of the recorded event
+                    fig, axs = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+                    axs[0].plot(timestamps, channel_data[1], label="CH1 (Scintillator 1)")
+                    axs[1].plot(timestamps, channel_data[2], label="CH2 (Scintillator 2)")
+                    axs[2].plot(timestamps, channel_data[3], label="CH3 (sMDT)")
+                    axs[0].axhline(y=SCINTILLATOR_THRESHOLD, color='r', linestyle='--', label="CH1 & CH2 Threshold")
+                    axs[2].axhline(y=SMDT_THRESHOLD, color='g', linestyle='--', label="CH3 Threshold")
+                    axs[2].set_xlabel("Time (s)")
+                    axs[1].set_ylabel("Voltage (V)")
+                    fig.suptitle(f"Waveform for Event {event_count}")
+                    for ax in axs: ax.legend()
+                    for ax in axs: ax.grid()
+                    plt.tight_layout()
+plt.show()
+
+print(f"\nData collection complete. {event_count} events recorded.")
+print(f"Event files saved in: {save_dir}")

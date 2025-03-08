@@ -1,114 +1,125 @@
 import pyvisa
-import time
-import pandas as pd
-import os
 import numpy as np
+import csv
+import time
+import os
+import matplotlib.pyplot as plt
 
-# Connect to oscilloscope
+# Initialize VISA resource manager
 rm = pyvisa.ResourceManager()
-scope = rm.open_resource('USB0::0x0699::0x03A3::C031652::INSTR')
 
-# Get scaling factors
-ymult_ch1 = float(scope.query('WFMPRE:YMULT?'))  # CH1 scale
-yzero_ch1 = float(scope.query('WFMPRE:YZERO?'))
-yoff_ch1 = float(scope.query('WFMPRE:YOFF?'))
+# List available VISA devices
+devices = rm.list_resources()
+print("Available VISA Devices:", devices)
 
-ymult_ch2 = float(scope.query('WFMPRE:YMULT?'))  # CH2 scale
-yzero_ch2 = float(scope.query('WFMPRE:YZERO?'))
-yoff_ch2 = float(scope.query('WFMPRE:YOFF?'))
+if not devices:
+    raise Exception("No VISA devices found. Check oscilloscope connection.")
 
-# Print scaling factors for debugging
-print(f"CH1 Scaling Factors: ymult={ymult_ch1}, yzero={yzero_ch1}, yoff={yoff_ch1}")
-print(f"CH2 Scaling Factors: ymult={ymult_ch2}, yzero={yzero_ch2}, yoff={yoff_ch2}")
+# Select the correct VISA resource dynamically
+oscope = rm.open_resource(devices[0])  # Uses the first available device (update manually if needed)
 
-# Configure waveform retrieval
-scope.write('DATA:WIDTH 1')
-scope.write('DATA:ENC RIB')
+# Test communication
+oscope.write("*IDN?")
+response = oscope.read()
+print("Oscilloscope ID:", response)
+
+# Define save directory
+save_dir = "C:\\Users\\Swager\\OneDrive\\Desktop\\experiment_folder\\events"
+os.makedirs(save_dir, exist_ok=True)  # Ensure directory exists
 
 # Define event detection parameters
-EVENT_THRESHOLD = 2.2  # Voltage threshold for both CH1 & CH2
-SPIKE_THRESHOLD = 1.0  # Minimum sudden voltage change (ΔV) to detect a spike
-EVENT_COOLDOWN = 1  # Minimum time (in seconds) between events
-RUN_TIME = 60  # Total monitoring duration
-SAVE_PATH = r"C:\Users\Swager\OneDrive\Desktop\experiment_folder"  # Path to save events
+SCINTILLATOR_THRESHOLD = 2.2  # Voltage threshold for CH1 & CH2
+SCINTILLATOR_DURATION = 10  # Number of consecutive points above threshold
+SMDT_THRESHOLD = -30.0E-3  # Voltage threshold for CH3
+SMDT_DELAY = 8.44E-10  # Expected time delay for CH3 (mean latency)
+SMDT_WINDOW = 1.874E-10  # Increased window to 2x SEM  # Allowed time window for CH3 detection (SEM)
+DEAD_TIME = 50E-6  # Ignore new events for 50µs
 
-# Ensure save directory exists
-os.makedirs(SAVE_PATH, exist_ok=True)
-
-print("Monitoring for muon events with CH1 & CH2 coincidence and ΔV/Δt spike detection...")
-
+# Define collection settings
+event_target = 1  # Stop after recording this many events
+event_limit = 100  # Stop after this many waveform captures (set None for unlimited)
 start_time = time.time()
-last_event_time = 0  # Track last event time to enforce cooldown
-prev_max_ch1 = 0  # Track previous frame voltage for CH1
-prev_max_ch2 = 0  # Track previous frame voltage for CH2
-event_count = 0  # Track number of events recorded
+event_count = 0
 
-try:
-    while time.time() - start_time < RUN_TIME:
-        # Get CH1 data
-        scope.write('DATA:SOU CH1')
-        raw_data_ch1 = scope.query_binary_values('CURVe?', datatype='B', container=list)
-        voltages_ch1 = [(ymult_ch1 * (point - yoff_ch1)) + yzero_ch1 for point in raw_data_ch1]
+print("\n--- Starting Continuous Data Collection ---")
 
-        # Get CH2 data
-        scope.write('DATA:SOU CH2')
-        raw_data_ch2 = scope.query_binary_values('CURVe?', datatype='B', container=list)
-        voltages_ch2 = [(ymult_ch2 * (point - yoff_ch2)) + yzero_ch2 for point in raw_data_ch2]
+while event_count < event_target:
+    if event_limit and event_count >= event_limit:
+        break
 
-        # Compute rate of change (ΔV/Δt)
-        dV_ch1 = np.diff(voltages_ch1, prepend=voltages_ch1[0])  # ΔV for CH1
-        dV_ch2 = np.diff(voltages_ch2, prepend=voltages_ch2[0])  # ΔV for CH2
+    all_data = []
+    timestamps = []
+    channel_data = {1: [], 2: [], 3: []}
+    
+    # Acquire data for each channel
+    for channel, name in [(1, "Scintillator 1"), (2, "Scintillator 2"), (3, "sMDT")]:
+        oscope.write(f"DATa:SOUrce CH{channel}")
+        oscope.write("DATa:ENCdg ASCII")
+        oscope.write("DATa:WIDth 1")
+        oscope.write("ACQuire:MODe SAMPLE")
 
-        # Print raw and converted data for debugging (first 10 values)
-        print(f"Raw CH1 Data: {raw_data_ch1[:10]}")
-        print(f"Converted CH1 Voltages: {voltages_ch1[:10]}")
-        print(f"Raw CH2 Data: {raw_data_ch2[:10]}")
-        print(f"Converted CH2 Voltages: {voltages_ch2[:10]}")
-        
-        # Find max voltage in the frame
-        max_ch1 = max(voltages_ch1)
-        max_ch2 = max(voltages_ch2)
-        print(f"Max Voltage CH1: {max_ch1:.3f} V | Max Voltage CH2: {max_ch2:.3f} V")
+        # Query scaling factors
+        oscope.write("WFMPRe:YMUlt?")
+        ymult = float(oscope.read())
 
-        # Detect voltage spikes
-        spike_ch1 = max(abs(dV_ch1)) > SPIKE_THRESHOLD
-        spike_ch2 = max(abs(dV_ch2)) > SPIKE_THRESHOLD
+        oscope.write("WFMPRe:YOFf?")
+        yoff = float(oscope.read())
 
-        # Event Detection: Coincidence condition (Both CH1 & CH2 must cross threshold + detect spike)
-        if (max_ch1 > EVENT_THRESHOLD and max_ch2 > EVENT_THRESHOLD and
-                prev_max_ch1 <= EVENT_THRESHOLD and prev_max_ch2 <= EVENT_THRESHOLD and
-                spike_ch1 and spike_ch2):
-            current_time = time.time()
-            if current_time - last_event_time > EVENT_COOLDOWN:
-                event_count += 1
-                last_event_time = current_time  # Reset cooldown timer
+        oscope.write("WFMPRe:YZEro?")
+        yzero = float(oscope.read())
 
-                # Save event data to CSV
-                timestamp = time.strftime("%Y%m%d-%H%M%S")
-                event_filename = os.path.join(SAVE_PATH, f"Muon_Event_{event_count:04d}_{timestamp}.csv")
+        # Request waveform data
+        oscope.write("CURVe?")
+        raw_data = oscope.read()
 
-                # Create DataFrame and save
-                df = pd.DataFrame({
-                    "Time Index": range(len(voltages_ch1)),
-                    "Voltage CH1 (V)": voltages_ch1,
-                    "Voltage CH2 (V)": voltages_ch2,
-                    "ΔV CH1 (V/sample)": dV_ch1,
-                    "ΔV CH2 (V/sample)": dV_ch2
-                })
-                df.to_csv(event_filename, index=False)
+        # Convert raw data to numeric values
+        raw_waveform = np.array(raw_data.split(","), dtype=float)
 
-                print(f"Muon event detected! Saved as {event_filename}")
+        # Apply scaling conversion
+        voltage_values = (raw_waveform - yoff) * ymult + yzero
 
-        # Store previous frame voltage
-        prev_max_ch1 = max_ch1
-        prev_max_ch2 = max_ch2
+        # Store data
+        channel_data[channel] = voltage_values
+        if channel == 1:
+            timestamps = np.linspace(0, len(voltage_values) * 1e-9, len(voltage_values))  # Assuming 1 ns sample rate
+    
+    # Debugging: Print occurrences where CH1 & CH2 exceed threshold together
+    coincident_events = np.where((channel_data[1] > SCINTILLATOR_THRESHOLD) & (channel_data[2] > SCINTILLATOR_THRESHOLD))[0]
+    print(f"Number of CH1 & CH2 coincidences: {len(coincident_events)}")
+    
+    if len(coincident_events) > 0:
+        for idx in coincident_events:
+            if idx + SCINTILLATOR_DURATION < len(channel_data[1]) and all(channel_data[1][idx:idx+SCINTILLATOR_DURATION] > SCINTILLATOR_THRESHOLD) and all(channel_data[2][idx:idx+SCINTILLATOR_DURATION] > SCINTILLATOR_THRESHOLD):
+                smdt_time = timestamps[idx] + SMDT_DELAY
+                smdt_window_start = smdt_time - SMDT_WINDOW
+                smdt_window_end = smdt_time + SMDT_WINDOW
 
-        # Adjust sleep time for better resolution
-        time.sleep(0.1)  # Faster polling rate
+                smdt_event_indices = np.where((timestamps >= smdt_window_start) & (timestamps <= smdt_window_end) & (channel_data[3] < SMDT_THRESHOLD))[0]
 
-except KeyboardInterrupt:
-    print("\nStopping monitoring.")
+                if len(smdt_event_indices) > 0:
+                    event_count += 1
+                    event_filename = os.path.join(save_dir, f"Event_{event_count:03d}.csv")
+                    with open(event_filename, "w", newline="") as event_file:
+                        writer = csv.writer(event_file)
+                        writer.writerow(["Time (s)", "CH1 (V)", "CH2 (V)", "sMDT (V)"])
+                        for i in range(len(timestamps)):
+                            writer.writerow([timestamps[i], channel_data[1][i], channel_data[2][i], channel_data[3][i]])
+                    print(f"Event {event_count} recorded: {event_filename}")
+                    
+                    # Plot the waveform of the recorded event
+                    fig, axs = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+                    axs[0].plot(timestamps, channel_data[1], label="CH1 (Scintillator 1)")
+                    axs[1].plot(timestamps, channel_data[2], label="CH2 (Scintillator 2)")
+                    axs[2].plot(timestamps, channel_data[3], label="CH3 (sMDT)")
+                    axs[0].axhline(y=SCINTILLATOR_THRESHOLD, color='r', linestyle='--', label="CH1 & CH2 Threshold")
+                    axs[2].axhline(y=SMDT_THRESHOLD, color='g', linestyle='--', label="CH3 Threshold")
+                    axs[2].set_xlabel("Time (s)")
+                    axs[1].set_ylabel("Voltage (V)")
+                    fig.suptitle(f"Waveform for Event {event_count}")
+                    for ax in axs: ax.legend()
+                    for ax in axs: ax.grid()
+                    plt.tight_layout()
+plt.show()
 
-# Close oscilloscope connection
-scope.close()
-print("Experiment finished.")
+print(f"\nData collection complete. {event_count} events recorded.")
+print(f"Event files saved in: {save_dir}")
