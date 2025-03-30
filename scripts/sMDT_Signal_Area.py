@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Define the directory path
-directory = os.path.join(os.getcwd(), "raw_data", "Experiment_1_Raw_Data")
+directory = os.path.join(os.path.dirname(os.getcwd()), "raw_data", "Experiment_1_Raw_Data")
 print(f"Processing files in: {directory}")
 print("Files in directory:", os.listdir(directory))
 
